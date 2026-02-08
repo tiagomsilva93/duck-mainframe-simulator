@@ -57,6 +57,7 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
         if (!isLocalUpdate.current) {
             const raw = content.split('\n');
             const processed = raw.map(l => ({ cmd: '', content: l.padEnd(80, ' ').substring(0, 80) }));
+            // Ensure at least a few empty lines for visual comfort
             while (processed.length < 24) processed.push({ cmd: '', content: ' '.repeat(80) });
             setLines(processed);
         }
@@ -161,33 +162,62 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
             e.preventDefault();
             const newLines = [...lines];
             
-            let startCol = AREA_A_COL;
-            const contentPart = currentLine.substring(INDICATOR_COL, MAX_CODE_COL + 1).trimStart();
-            const isAreaB = currentLine[AREA_B_COL] !== ' ' || (currentLine.substring(AREA_A_COL, AREA_B_COL).trim() === "");
-            if (isAreaB) startCol = AREA_B_COL;
-
+            // Standard ISPF/Editor Behavior: Split the line or create new line
             const prefix = currentLine.substring(0, cursor);
             const suffix = currentLine.substring(cursor);
             
+            // Default indent for new line: Area B (Column 12 / Index 11) is standard for COBOL Procedure
+            const defaultIndent = AREA_B_COL; 
+
             newLines[index].content = prefix.padEnd(80, ' ');
-            const newLineText = " ".repeat(startCol) + suffix.trimStart();
+            
+            // Create new line with spaces + suffix
+            // If suffix is empty, just create an indented empty line
+            const newLineText = " ".repeat(defaultIndent) + suffix.trimStart();
+            
             newLines.splice(index + 1, 0, { cmd: '', content: newLineText.padEnd(80, ' ') });
             
             updateContent(newLines);
-            pendingCursor.current = { line: index + 1, col: startCol };
+            // Move cursor to the new line at indentation point
+            pendingCursor.current = { line: index + 1, col: defaultIndent };
             return;
         }
 
-        if (e.key === 'Backspace' && cursor > INDICATOR_COL) {
-            e.preventDefault();
-            const prefix = currentLine.substring(0, cursor - 1);
-            const suffix = currentLine.substring(cursor, MAX_CODE_COL + 1);
-            const idArea = currentLine.substring(MAX_CODE_COL + 1);
-            const newLine = (prefix + suffix + " ").substring(0, MAX_CODE_COL + 1) + idArea;
-            const nl = [...lines];
-            nl[index].content = newLine;
-            updateContent(nl);
-            pendingCursor.current = { line: index, col: cursor - 1 };
+        if (e.key === 'Backspace') {
+            // Handle merging lines if at start of editable area (but only if not top line)
+            // Editable area usually starts after indicator (col 6)
+            if (cursor <= INDICATOR_COL && index > 0) {
+                 e.preventDefault();
+                 const prevLine = lines[index - 1].content.trimEnd();
+                 const currentContent = currentLine.trimStart();
+                 
+                 // Calculate where cursor should end up on previous line
+                 const newCursorPos = prevLine.length;
+                 
+                 // Merge content
+                 const mergedContent = (prevLine + " " + currentContent).padEnd(80, ' ').substring(0, 80);
+                 
+                 const newLines = [...lines];
+                 newLines[index - 1].content = mergedContent;
+                 newLines.splice(index, 1); // Remove current line
+                 
+                 updateContent(newLines);
+                 pendingCursor.current = { line: index - 1, col: newCursorPos + 1 }; // +1 for the space we added
+                 return;
+            }
+
+            if (cursor > INDICATOR_COL) {
+                e.preventDefault();
+                const prefix = currentLine.substring(0, cursor - 1);
+                const suffix = currentLine.substring(cursor, MAX_CODE_COL + 1);
+                const idArea = currentLine.substring(MAX_CODE_COL + 1);
+                const newLine = (prefix + suffix + " ").substring(0, MAX_CODE_COL + 1) + idArea;
+                const nl = [...lines];
+                nl[index].content = newLine;
+                updateContent(nl);
+                pendingCursor.current = { line: index, col: cursor - 1 };
+                return;
+            }
         }
 
         if (e.key === 'Delete' && cursor <= MAX_CODE_COL) {
@@ -233,6 +263,7 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
             }
             
             let cleanRow = row.trimEnd();
+            // Basic heuristic to keep existing indent if pasted line is unindented
             if (!cleanRow.startsWith(' ')) {
                 cleanRow = " ".repeat(AREA_B_COL) + cleanRow;
             } else if (cleanRow.length < INDICATOR_COL) {

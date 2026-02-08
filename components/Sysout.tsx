@@ -87,9 +87,9 @@ export const Sysout: React.FC<SysoutProps> = ({ logs, diagnostics }) => {
         )}
         
         {logs.length === 0 && diagnostics.length === 0 && (
-            <div className="text-gray-700 italic opacity-50 flex flex-col items-center justify-center h-full gap-2">
-                <span className="text-2xl">⚡</span>
-                <span>NO DIAGNOSTICS - READY TO SUBMIT</span>
+            <div className="text-gray-600 italic opacity-70 flex flex-col items-start h-full gap-2 mt-4 ml-2">
+                <span>READY.</span>
+                <span>PRESS <span className="text-white font-bold">RUN (F4)</span> TO COMPILE AND EXECUTE.</span>
             </div>
         )}
       </div>
