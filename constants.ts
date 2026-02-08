@@ -15,7 +15,38 @@ export const COBOL_EXAMPLES = [
   }
 ];
 
-export const SAMPLE_CODE = COBOL_EXAMPLES[0].code;
+// Updated to a valid didactic template to ensure a professional start
+export const SAMPLE_CODE = `       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DUCKHELLO.
+
+      * -------------------------------------------------
+      * DUCK MAINFRAME SIMULATOR
+      * Example COBOL Program
+      * -------------------------------------------------
+
+       ENVIRONMENT DIVISION.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+
+       01 WS-MESSAGE        PIC X(40)
+          VALUE 'HELLO FROM DUCK MAINFRAME SIMULATOR'.
+
+       01 WS-COUNTER        PIC 9(02) VALUE 1.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+
+           DISPLAY WS-MESSAGE.
+
+           PERFORM VARYING WS-COUNTER FROM 1 BY 1
+               UNTIL WS-COUNTER > 3
+               DISPLAY 'EXECUTION COUNT: ' WS-COUNTER
+           END-PERFORM.
+
+           DISPLAY 'PROGRAM FINISHED SUCCESSFULLY.'.
+
+           STOP RUN.`;
 
 export const PANEL_ISR_PRIM = `)ATTR
   % TYPE(TEXT) INTENS(HIGH) COLOR(WHITE)
