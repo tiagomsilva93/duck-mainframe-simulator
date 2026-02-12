@@ -36,6 +36,7 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
     const [lines, setLines] = useState<LineState[]>([]);
     const [headerError, setHeaderError] = useState("");
     
+    // Ref to track if the update came from internal typing vs external prop change
     const isLocalUpdate = useRef(false);
     const lineInputsRef = useRef<Map<number, HTMLInputElement>>(new Map());
     const pendingCursor = useRef<{ line: number, col: number } | null>(null);
@@ -44,6 +45,7 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
     const AREA_A_COL = 7;    
     const AREA_B_COL = 11;   
     const MAX_CODE_COL = 71; 
+    const TOTAL_COLS = 80;
 
     useEffect(() => {
         const critical = diagnostics.find(d => d.severity === 'ERROR' || d.severity === 'SEVERE');
@@ -53,15 +55,23 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
         else setHeaderError("");
     }, [diagnostics]);
 
+    // TAREFA 1: Corrigir sincronização destrutiva
     useEffect(() => {
-        if (!isLocalUpdate.current) {
-            const raw = content.split('\n');
-            const processed = raw.map(l => ({ cmd: '', content: l.padEnd(80, ' ').substring(0, 80) }));
-            // Ensure at least a few empty lines for visual comfort
-            while (processed.length < 24) processed.push({ cmd: '', content: ' '.repeat(80) });
-            setLines(processed);
+        if (isLocalUpdate.current) {
+            isLocalUpdate.current = false;
+            return;
         }
-        isLocalUpdate.current = false;
+
+        const raw = content.split('\n');
+        const processed = raw.map(l => ({ 
+            cmd: '', 
+            content: l.padEnd(TOTAL_COLS, ' ').substring(0, TOTAL_COLS) 
+        }));
+        
+        // Ensure at least a few empty lines for visual comfort
+        while (processed.length < 24) processed.push({ cmd: '', content: ' '.repeat(TOTAL_COLS) });
+        
+        setLines(processed);
     }, [content]);
 
     useLayoutEffect(() => {
@@ -70,25 +80,29 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
             const input = lineInputsRef.current.get(line);
             if (input) {
                 input.focus();
-                const safeCol = Math.max(0, Math.min(80, col));
+                // Ensure cursor doesn't go out of bounds
+                const safeCol = Math.max(0, Math.min(TOTAL_COLS, col));
                 input.setSelectionRange(safeCol, safeCol);
             }
             pendingCursor.current = null;
         }
     });
 
+    // TAREFA 3: Garantir consistência estrutural do buffer
     const updateContent = (newLines: LineState[]) => {
         isLocalUpdate.current = true;
         setLines(newLines);
+        // We trimEnd for external storage to avoid massive files with trailing spaces,
+        // but internal state (newLines) MUST keep 80 chars.
         const joined = newLines.map(l => l.content.trimEnd()).join('\n');
         onChange(joined);
     };
 
     const handleSelect = (e: React.SyntheticEvent<HTMLInputElement>, index: number) => {
         const target = e.currentTarget;
-        if (target.selectionStart !== null && target.selectionStart < INDICATOR_COL) {
-            target.setSelectionRange(INDICATOR_COL, INDICATOR_COL);
-        }
+        // Optional: Force cursor to stay after sequence numbers/indicator if desired,
+        // but typical ISPF editors allow cursor anywhere. 
+        // We only enforce staying after the command area which is handled by separate input.
     };
 
     const handleContentKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, index: number) => {
@@ -103,9 +117,12 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
         const cursor = target.selectionStart || 0;
         const currentLine = lines[index].content;
 
+        // TAREFA 4: Estabilidade do Cursor e Navegação
         if (e.key === 'Home') {
             e.preventDefault();
-            const firstChar = currentLine.substring(INDICATOR_COL).search(/\S/);
+            // Jump to first non-whitespace char after indicator, or Area A
+            const contentArea = currentLine.substring(INDICATOR_COL);
+            const firstChar = contentArea.search(/\S/);
             const dest = firstChar === -1 ? AREA_A_COL : firstChar + INDICATOR_COL;
             target.setSelectionRange(dest, dest);
             return;
@@ -113,7 +130,7 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
 
         if (e.key === 'End') {
             e.preventDefault();
-            const trimmed = currentLine.substring(0, MAX_CODE_COL + 1).trimEnd();
+            const trimmed = currentLine.trimEnd();
             target.setSelectionRange(trimmed.length, trimmed.length);
             return;
         }
@@ -158,60 +175,61 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
             return;
         }
 
+        // TAREFA 2: Corrigir comportamento do ENTER
         if (e.key === 'Enter') {
             e.preventDefault();
             const newLines = [...lines];
             
-            // Standard ISPF/Editor Behavior: Split the line or create new line
+            // Split content
             const prefix = currentLine.substring(0, cursor);
             const suffix = currentLine.substring(cursor);
             
-            // Default indent for new line: Area B (Column 12 / Index 11) is standard for COBOL Procedure
-            const defaultIndent = AREA_B_COL; 
-
-            newLines[index].content = prefix.padEnd(80, ' ');
+            // Determine Indentation
+            // Default Area B (Column 12, Index 11)
+            const indentCol = AREA_B_COL;
             
-            // Create new line with spaces + suffix
-            // If suffix is empty, just create an indented empty line
-            const newLineText = " ".repeat(defaultIndent) + suffix.trimStart();
+            // Current Line: Prefix + spaces
+            newLines[index].content = prefix.padEnd(TOTAL_COLS, ' ').substring(0, TOTAL_COLS);
             
-            newLines.splice(index + 1, 0, { cmd: '', content: newLineText.padEnd(80, ' ') });
+            // New Line: Indent + Suffix (trimmed start) + spaces
+            const suffixTrimmed = suffix.trimStart();
+            const newLineContent = (" ".repeat(indentCol) + suffixTrimmed).padEnd(TOTAL_COLS, ' ').substring(0, TOTAL_COLS);
+            
+            newLines.splice(index + 1, 0, { cmd: '', content: newLineContent });
             
             updateContent(newLines);
-            // Move cursor to the new line at indentation point
-            pendingCursor.current = { line: index + 1, col: defaultIndent };
+            pendingCursor.current = { line: index + 1, col: indentCol };
             return;
         }
 
         if (e.key === 'Backspace') {
-            // Handle merging lines if at start of editable area (but only if not top line)
-            // Editable area usually starts after indicator (col 6)
-            if (cursor <= INDICATOR_COL && index > 0) {
+            // Merge lines if at start of content area (Area A start or earlier)
+            if (cursor <= AREA_A_COL && index > 0) {
                  e.preventDefault();
                  const prevLine = lines[index - 1].content.trimEnd();
                  const currentContent = currentLine.trimStart();
                  
-                 // Calculate where cursor should end up on previous line
                  const newCursorPos = prevLine.length;
                  
-                 // Merge content
-                 const mergedContent = (prevLine + " " + currentContent).padEnd(80, ' ').substring(0, 80);
+                 // Concatenate without extra space to allow joining words
+                 const mergedContent = (prevLine + currentContent).padEnd(TOTAL_COLS, ' ').substring(0, TOTAL_COLS);
                  
                  const newLines = [...lines];
                  newLines[index - 1].content = mergedContent;
-                 newLines.splice(index, 1); // Remove current line
+                 newLines.splice(index, 1);
                  
                  updateContent(newLines);
-                 pendingCursor.current = { line: index - 1, col: newCursorPos + 1 }; // +1 for the space we added
+                 pendingCursor.current = { line: index - 1, col: newCursorPos }; 
                  return;
             }
 
-            if (cursor > INDICATOR_COL) {
+            // Normal Backspace within line
+            if (cursor > 0) {
                 e.preventDefault();
                 const prefix = currentLine.substring(0, cursor - 1);
-                const suffix = currentLine.substring(cursor, MAX_CODE_COL + 1);
-                const idArea = currentLine.substring(MAX_CODE_COL + 1);
-                const newLine = (prefix + suffix + " ").substring(0, MAX_CODE_COL + 1) + idArea;
+                const suffix = currentLine.substring(cursor);
+                const newLine = (prefix + suffix + " ").substring(0, TOTAL_COLS); // Shift left and pad end
+                
                 const nl = [...lines];
                 nl[index].content = newLine;
                 updateContent(nl);
@@ -220,28 +238,32 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
             }
         }
 
-        if (e.key === 'Delete' && cursor <= MAX_CODE_COL) {
+        if (e.key === 'Delete') {
             e.preventDefault();
+            if (cursor >= TOTAL_COLS) return;
+
             const prefix = currentLine.substring(0, cursor);
-            const suffix = currentLine.substring(cursor + 1, MAX_CODE_COL + 1);
-            const idArea = currentLine.substring(MAX_CODE_COL + 1);
-            const newLine = (prefix + suffix + " ").substring(0, MAX_CODE_COL + 1) + idArea;
+            const suffix = currentLine.substring(cursor + 1);
+            const newLine = (prefix + suffix + " ").substring(0, TOTAL_COLS);
+
             const nl = [...lines];
             nl[index].content = newLine;
             updateContent(nl);
             pendingCursor.current = { line: index, col: cursor };
+            return;
         }
 
+        // Normal Typing
         if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
             e.preventDefault();
-            if (cursor > MAX_CODE_COL) return; 
+            if (cursor >= TOTAL_COLS) return; 
 
             const char = e.key.toUpperCase();
             const prefix = currentLine.substring(0, cursor);
-            const suffix = currentLine.substring(cursor, MAX_CODE_COL); 
-            const idArea = currentLine.substring(MAX_CODE_COL + 1);
+            const suffix = currentLine.substring(cursor, TOTAL_COLS - 1); // Truncate last char to make room
             
-            const newLine = (prefix + char + suffix).substring(0, MAX_CODE_COL + 1) + idArea;
+            const newLine = (prefix + char + suffix).padEnd(TOTAL_COLS, ' ').substring(0, TOTAL_COLS);
+            
             const nl = [...lines];
             nl[index].content = newLine;
             updateContent(nl);
@@ -259,18 +281,17 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
 
         rawRows.forEach(row => {
             if (currentRow >= newLines.length) {
-                newLines.push({ cmd: '', content: ' '.repeat(80) });
+                newLines.push({ cmd: '', content: ' '.repeat(TOTAL_COLS) });
             }
             
             let cleanRow = row.trimEnd();
-            // Basic heuristic to keep existing indent if pasted line is unindented
             if (!cleanRow.startsWith(' ')) {
                 cleanRow = " ".repeat(AREA_B_COL) + cleanRow;
             } else if (cleanRow.length < INDICATOR_COL) {
                  cleanRow = " ".repeat(INDICATOR_COL) + cleanRow;
             }
 
-            newLines[currentRow].content = cleanRow.padEnd(80, ' ').substring(0, 80);
+            newLines[currentRow].content = cleanRow.padEnd(TOTAL_COLS, ' ').substring(0, TOTAL_COLS);
             currentRow++;
         });
 
@@ -362,7 +383,7 @@ export const IspfEditor: React.FC<IspfEditorProps> = ({
                                     value={line.content}
                                     onChange={(e) => {
                                         const nl = [...lines];
-                                        nl[i].content = e.target.value.padEnd(80, ' ').substring(0, 80);
+                                        nl[i].content = e.target.value.padEnd(TOTAL_COLS, ' ').substring(0, TOTAL_COLS);
                                         updateContent(nl);
                                     }}
                                     onKeyDown={(e) => handleContentKeyDown(e, i)}
