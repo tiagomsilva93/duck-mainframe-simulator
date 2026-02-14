@@ -1,286 +1,206 @@
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
-import { Diagnostic } from '../compiler/types';
-import { Lexer } from '../compiler/lexer';
-import { TokenType } from '../compiler/types';
-import { getTokenClass, ISPF_THEME } from '../utils/ispfTheme';
+import React, { useState, useEffect, useRef } from "react";
+import { Diagnostic } from "../compiler/types";
 
-interface IspfEditorProps {
-    content: string;
-    onChange: (content: string) => void;
-    onExit: () => void;
-    onRun: () => void;
-    onClear: () => void;
-    onLoad: () => void;
-    onSave: () => void;
-    datasetName: string;
-    diagnostics: Diagnostic[];
+interface Props {
+  content: string;
+  onChange: (c: string) => void;
+  datasetName: string;
+  diagnostics: Diagnostic[];
 }
 
-interface LineState {
-    cmd: string;
-    content: string;
+interface Line {
+  content: string;
 }
 
-export const IspfEditor: React.FC<IspfEditorProps> = ({
-    content,
-    onChange,
-    onExit,
-    onRun,
-    onClear,
-    onLoad,
-    onSave,
-    datasetName,
-    diagnostics
+const TOTAL_COLS = 80;
+
+export const IspfEditor: React.FC<Props> = ({
+  content,
+  onChange,
+  datasetName,
+  diagnostics,
 }) => {
+  const [lines, setLines] = useState<Line[]>([]);
+  const [mode, setMode] = useState<"INSERT" | "OVERWRITE">("INSERT");
 
-    const TOTAL_COLS = 80;
-    const INDICATOR_COL = 6;
-    const AREA_A_COL = 7;
-    const AREA_B_COL = 11;
-    const MAX_CODE_COL = 71;
+  const inputRefs = useRef<Map<number, HTMLInputElement>>(new Map());
 
-    const [lines, setLines] = useState<LineState[]>([]);
-    const [headerError, setHeaderError] = useState("");
+  // ===== LOAD EXTERNAL CONTENT =====
+  useEffect(() => {
+    const split = content.split("\n").map((l) => ({
+      content: l.padEnd(TOTAL_COLS, " ").substring(0, TOTAL_COLS),
+    }));
 
-    const lineInputsRef = useRef<Map<number, HTMLInputElement>>(new Map());
-    const pendingCursor = useRef<{ line: number; col: number } | null>(null);
+    if (split.length === 0) split.push({ content: " ".repeat(TOTAL_COLS) });
 
-    const internalContentRef = useRef("");
+    setLines(split);
+  }, [content]);
 
-    /* =============================
-       HEADER DIAGNOSTICS
-    ============================== */
+  // ===== UPDATE EXTERNAL STATE =====
+  const syncExternal = (newLines: Line[]) => {
+    const joined = newLines.map((l) => l.content.trimEnd()).join("\n");
+    onChange(joined);
+  };
 
-    useEffect(() => {
-        const critical = diagnostics.find(d => d.severity === 'ERROR' || d.severity === 'SEVERE');
-        const warn = diagnostics.find(d => d.severity === 'WARNING');
-        if (critical) setHeaderError(critical.code);
-        else if (warn) setHeaderError(warn.code);
-        else setHeaderError("");
-    }, [diagnostics]);
+  // ===== HANDLE KEY =====
+  const handleKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    row: number
+  ) => {
+    const input = e.currentTarget;
+    const col = input.selectionStart ?? 0;
+    const current = lines[row].content;
 
-    /* =============================
-       SYNC EXTERNAL CONTENT (SAFE)
-    ============================== */
+    // TOGGLE MODE
+    if (e.key === "Insert") {
+      e.preventDefault();
+      setMode((m) => (m === "INSERT" ? "OVERWRITE" : "INSERT"));
+      return;
+    }
 
-    useEffect(() => {
-        if (content === internalContentRef.current) return;
+    // ENTER
+    if (e.key === "Enter") {
+      e.preventDefault();
 
-        const raw = content.split('\n');
-        const processed = raw.map(l => ({
-            cmd: '',
-            content: l.padEnd(TOTAL_COLS, ' ').substring(0, TOTAL_COLS)
-        }));
+      const before = current.substring(0, col);
+      const after = current.substring(col);
 
-        while (processed.length < 24) {
-            processed.push({ cmd: '', content: ' '.repeat(TOTAL_COLS) });
-        }
+      const newLines = [...lines];
+      newLines[row].content = before.padEnd(TOTAL_COLS, " ");
 
-        setLines(processed);
-        internalContentRef.current = processed.map(l => l.content).join('\n');
-    }, [content]);
+      newLines.splice(row + 1, 0, {
+        content: after.trimStart().padEnd(TOTAL_COLS, " "),
+      });
 
-    useLayoutEffect(() => {
-        if (pendingCursor.current) {
-            const { line, col } = pendingCursor.current;
-            const input = lineInputsRef.current.get(line);
-            if (input) {
-                input.focus();
-                const safeCol = Math.max(0, Math.min(TOTAL_COLS, col));
-                input.setSelectionRange(safeCol, safeCol);
-            }
-            pendingCursor.current = null;
-        }
-    });
+      setLines(newLines);
+      syncExternal(newLines);
 
-    const updateContent = (newLines: LineState[]) => {
+      setTimeout(() => {
+        const next = inputRefs.current.get(row + 1);
+        next?.focus();
+        next?.setSelectionRange(0, 0);
+      }, 0);
+
+      return;
+    }
+
+    // BACKSPACE
+    if (e.key === "Backspace") {
+      if (col === 0 && row > 0) {
+        e.preventDefault();
+
+        const prev = lines[row - 1].content.trimEnd();
+        const merged =
+          (prev + current.trimStart()).padEnd(TOTAL_COLS, " ");
+
+        const newLines = [...lines];
+        newLines[row - 1].content = merged.substring(0, TOTAL_COLS);
+        newLines.splice(row, 1);
+
         setLines(newLines);
-        const joined = newLines.map(l => l.content).join('\n');
-        internalContentRef.current = joined;
-        onChange(joined);
-    };
+        syncExternal(newLines);
 
-    /* =============================
-       KEYBOARD ENGINE
-    ============================== */
+        setTimeout(() => {
+          const prevInput = inputRefs.current.get(row - 1);
+          prevInput?.focus();
+          prevInput?.setSelectionRange(prev.length, prev.length);
+        }, 0);
 
-    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, index: number) => {
+        return;
+      }
+    }
 
-        const target = e.currentTarget;
-        const cursor = target.selectionStart ?? 0;
-        const currentLine = lines[index].content;
+    // NORMAL CHAR
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
 
-        /* FUNCTION KEYS */
-        if (e.key === 'F3') { e.preventDefault(); onExit(); return; }
-        if (e.key === 'F4') { e.preventDefault(); onRun(); return; }
-        if (e.key === 'F5') { e.preventDefault(); onClear(); return; }
-        if (e.key === 'F6') { e.preventDefault(); onLoad(); return; }
-        if (e.key === 'F7') { e.preventDefault(); onSave(); return; }
+      if (col >= TOTAL_COLS) return;
 
-        /* ENTER */
-        if (e.key === 'Enter') {
-            e.preventDefault();
+      const char = e.key.toUpperCase();
+      let newLine = current;
 
-            const newLines = [...lines];
-            const prefix = currentLine.substring(0, cursor);
-            const suffix = currentLine.substring(cursor);
+      if (mode === "INSERT") {
+        newLine =
+          (current.substring(0, col) +
+            char +
+            current.substring(col))
+            .substring(0, TOTAL_COLS);
+      } else {
+        newLine =
+          current.substring(0, col) +
+          char +
+          current.substring(col + 1);
+      }
 
-            newLines[index].content =
-                prefix.padEnd(TOTAL_COLS, ' ').substring(0, TOTAL_COLS);
+      const newLines = [...lines];
+      newLines[row].content = newLine.padEnd(TOTAL_COLS, " ");
 
-            const newLineContent =
-                (" ".repeat(AREA_B_COL) + suffix.trimStart())
-                    .padEnd(TOTAL_COLS, ' ')
-                    .substring(0, TOTAL_COLS);
+      setLines(newLines);
+      syncExternal(newLines);
 
-            newLines.splice(index + 1, 0, { cmd: '', content: newLineContent });
+      setTimeout(() => {
+        input.setSelectionRange(col + 1, col + 1);
+      }, 0);
+    }
+  };
 
-            updateContent(newLines);
-            pendingCursor.current = { line: index + 1, col: AREA_B_COL };
-            return;
-        }
+  // ===== AUTO SCROLL INFINITE =====
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 50) {
+      setLines((prev) => [
+        ...prev,
+        { content: " ".repeat(TOTAL_COLS) },
+      ]);
+    }
+  };
 
-        /* BACKSPACE */
-        if (e.key === 'Backspace') {
-            if (cursor === 0 && index > 0) {
-                e.preventDefault();
+  return (
+    <div className="flex flex-col h-full bg-black font-mono text-green-500 text-lg">
+      
+      {/* HEADER */}
+      <div className="bg-blue-900 text-white px-2 py-1 flex justify-between text-sm font-bold">
+        <span>
+          EDIT {datasetName}
+        </span>
 
-                const prevLine = lines[index - 1].content;
-                const merged =
-                    (prevLine.trimEnd() + currentLine.trimStart())
-                        .padEnd(TOTAL_COLS, ' ')
-                        .substring(0, TOTAL_COLS);
+        <span
+          className="cursor-pointer text-yellow-400"
+          onClick={() =>
+            setMode((m) =>
+              m === "INSERT" ? "OVERWRITE" : "INSERT"
+            )
+          }
+        >
+          MODE: {mode}
+        </span>
+      </div>
 
-                const newLines = [...lines];
-                newLines[index - 1].content = merged;
-                newLines.splice(index, 1);
-
-                updateContent(newLines);
-                pendingCursor.current = {
-                    line: index - 1,
-                    col: prevLine.trimEnd().length
-                };
-                return;
-            }
-
-            if (cursor > 0) {
-                e.preventDefault();
-
-                const prefix = currentLine.substring(0, cursor - 1);
-                const suffix = currentLine.substring(cursor);
-                const newLine =
-                    (prefix + suffix + " ")
-                        .substring(0, TOTAL_COLS);
-
-                const newLines = [...lines];
-                newLines[index].content = newLine;
-
-                updateContent(newLines);
-                pendingCursor.current = { line: index, col: cursor - 1 };
-                return;
-            }
-        }
-
-        /* DELETE */
-        if (e.key === 'Delete') {
-            e.preventDefault();
-            if (cursor >= TOTAL_COLS) return;
-
-            const prefix = currentLine.substring(0, cursor);
-            const suffix = currentLine.substring(cursor + 1);
-            const newLine =
-                (prefix + suffix + " ")
-                    .substring(0, TOTAL_COLS);
-
-            const newLines = [...lines];
-            newLines[index].content = newLine;
-
-            updateContent(newLines);
-            pendingCursor.current = { line: index, col: cursor };
-            return;
-        }
-
-        /* NORMAL TYPING */
-        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            e.preventDefault();
-            if (cursor >= TOTAL_COLS) return;
-
-            const char = e.key.toUpperCase();
-            const prefix = currentLine.substring(0, cursor);
-            const suffix = currentLine.substring(cursor, TOTAL_COLS - 1);
-
-            const newLine =
-                (prefix + char + suffix)
-                    .padEnd(TOTAL_COLS, ' ')
-                    .substring(0, TOTAL_COLS);
-
-            const newLines = [...lines];
-            newLines[index].content = newLine;
-
-            updateContent(newLines);
-            pendingCursor.current = { line: index, col: cursor + 1 };
-        }
-    };
-
-    /* =============================
-       RENDER
-    ============================== */
-
-    const renderHighlightedLine = (text: string) => {
-        try {
-            const tokens = new Lexer(text).tokenize().filter(t => t.type !== TokenType.EOF);
-            return tokens.map((t, i) => (
-                <span key={i} className={getTokenClass(t.type)}>
-                    {t.value}
-                </span>
-            ));
-        } catch {
-            return text;
-        }
-    };
-
-    return (
-        <div className="flex flex-col h-full bg-black font-mono text-green-500 text-xl w-full overflow-hidden border-r border-gray-800">
-
-            <div className="bg-blue-900 text-white p-1 flex justify-between px-2 text-[10px] font-bold shrink-0">
-                <div className="flex gap-4">
-                    <span>EDIT {datasetName}</span>
-                    <span className="text-yellow-400 font-bold">{headerError}</span>
-                </div>
-                <span>COL 001 080</span>
+      {/* EDITOR */}
+      <div
+        className="flex-1 overflow-auto"
+        onScroll={handleScroll}
+      >
+        {lines.map((line, i) => (
+          <div key={i} className="flex">
+            <div className="w-[6ch] text-right text-cyan-500 pr-2">
+              {(i + 1).toString().padStart(6, "0")}
             </div>
 
-            <div className="flex-1 overflow-y-auto bg-black">
-
-                {lines.map((line, i) => (
-                    <div key={i} className="flex h-[1.5rem] items-center">
-
-                        <div className="w-[6ch] text-right text-cyan-500/60 border-r border-gray-800 mr-[1ch] font-bold">
-                            {(i + 1).toString().padStart(6, '0')}
-                        </div>
-
-                        <div className="relative w-[80ch] h-full">
-                            <div className="absolute inset-0 whitespace-pre pointer-events-none">
-                                {renderHighlightedLine(line.content)}
-                            </div>
-
-                            <input
-                                ref={el => {
-                                    if (el) lineInputsRef.current.set(i, el);
-                                    else lineInputsRef.current.delete(i);
-                                }}
-                                value={line.content}
-                                onKeyDown={(e) => handleKeyDown(e, i)}
-                                spellCheck={false}
-                                className="relative z-10 w-full h-full bg-transparent outline-none uppercase font-bold text-transparent caret-white"
-                                style={{ width: '80ch' }}
-                            />
-                        </div>
-
-                    </div>
-                ))}
-
-            </div>
-        </div>
-    );
+            <input
+              ref={(el) => {
+                if (el) inputRefs.current.set(i, el);
+              }}
+              value={line.content}
+              onChange={() => {}}
+              onKeyDown={(e) => handleKeyDown(e, i)}
+              className="bg-transparent outline-none w-[80ch] text-transparent caret-white"
+              style={{ caretShape: "block" as any }}
+              spellCheck={false}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 };
